@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-08T00:00:00Z",
+  "routes": {
+    "coverage": "/api/v1/coverage.json",
+    "country": "/api/v1/countries/{code}/{tab}.json",
+    "countryTranslated": "/api/v1/countries/{code}/{tab}/{lang}.json",
+    "articleTranslated": "/api/v1/countries/{code}/{tab}/{lang}/{id}.json"
+  },
+  "features": { "about": false },
+  "message": null
+}

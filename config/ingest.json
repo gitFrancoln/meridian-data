@@ -1,0 +1,9 @@
+{
+  "googleNewsEnabled": true,
+  "disabledCountries": [],
+  "disabledSources": [],
+  "translation": {
+    "providers": ["mymemory"],
+    "dailyCharLimit": 45000
+  }
+}
