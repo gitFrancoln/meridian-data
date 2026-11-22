@@ -1,19 +1,23 @@
 # Collects the news and publishes them on GitHub Pages.
 #
-# - On schedule: one ingest round for the tier of that schedule.
+# - On schedule: every 10 minutes the workflow checks which tier is due and
+#   runs one ingest round for it, or stops right away if none is due. GitHub
+#   delays and drops scheduled runs, so a fixed cron per tier left the data
+#   hours old; with a check every 10 minutes a dropped run is made up by the
+#   next one. Tier 1 is due every 30 minutes, tier 2 every 2 hours, tier 3
+#   every 6 hours (each with a few minutes of slack).
 # - On a push to config/: publishes the new configuration without an ingest
 #   round, so a change to app.json reaches the app in about a minute.
 # - By hand (Actions > publish > Run workflow): a round for the chosen tier.
 #
 # The data branch keeps site/ (what is published) and state/ (memory between
-# rounds) as a single commit that is rewritten on every run.
+# rounds, including state/schedule/tier<N> with the time of the last round of
+# each tier) as a single commit that is rewritten on every run.
 name: publish
 
 on:
   schedule:
-    - cron: '7,37 * * * *' # tier 1, every 30 minutes
-    - cron: '22 */2 * * *' # tier 2, every 2 hours
-    - cron: '52 */6 * * *' # tier 3, every 6 hours
+    - cron: '3,13,23,33,43,53 * * * *'
   push:
     branches: [main]
     paths: ['config/**']
@@ -30,33 +34,72 @@ permissions:
   pages: write
   id-token: write
 
-# Everything that writes the data branch runs one at a time.
-concurrency:
-  group: data
-  cancel-in-progress: false
-
 jobs:
+  # Decides what this run does. It reads the time of the last round of each
+  # tier from the data branch through the API, so a scheduled check that finds
+  # nothing due ends here, in a few seconds and without a Pages deployment.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tier: ${{ steps.tier.outputs.tier }}
+      publish: ${{ steps.tier.outputs.publish }}
+    steps:
+      # tier: the tier to collect (0 is all, empty is none).
+      # publish: false when a scheduled check finds nothing due.
+      - name: Pick the tier
+        id: tier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TIER: ${{ inputs.tier }}
+        run: |
+          publish=true
+          case "$EVENT" in
+            schedule)
+              now=$(date -u +%s)
+              tier="" best=0
+              # tier, interval in minutes, slack in minutes
+              for spec in "1 30 5" "2 120 10" "3 360 10"; do
+                set -- $spec
+                last=$(gh api -H "Accept: application/vnd.github.raw"                   "repos/$GITHUB_REPOSITORY/contents/state/schedule/tier$1?ref=data" 2>/dev/null || echo 0)
+                case "$last" in ""|*[!0-9]*) last=0 ;; esac
+                age=$(( (now - last) / 60 ))
+                echo "tier $1: last round $age min ago"
+                # Due when the interval minus the slack has passed; among
+                # the due tiers, the most overdue one (age / interval) wins.
+                if [ "$age" -ge $(( $2 - $3 )) ]; then
+                  score=$(( age * 1000 / $2 ))
+                  if [ "$score" -gt "$best" ]; then tier=$1 best=$score; fi
+                fi
+              done
+              if [ -z "$tier" ]; then
+                echo "No tier is due."
+                publish=false
+              fi
+              ;;
+            *) tier="$INPUT_TIER" ;; # empty on a config push: publish only
+          esac
+          echo "Tier: ${tier:-none}"
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
   publish:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    # Everything that writes the data branch runs one at a time. Only this
+    # job waits: a scheduled check that runs while a round is in progress
+    # still decides in seconds (and a pending config push is not replaced by
+    # a check that finds nothing due).
+    concurrency:
+      group: data
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy-retry.outputs.page_url }}
     steps:
-      - name: Pick the tier
-        id: tier
-        env:
-          SCHEDULE: ${{ github.event.schedule }}
-          INPUT_TIER: ${{ inputs.tier }}
-        run: |
-          case "$SCHEDULE" in
-            '7,37 * * * *') tier=1 ;;
-            '22 */2 * * *') tier=2 ;;
-            '52 */6 * * *') tier=3 ;;
-            *) tier="$INPUT_TIER" ;; # empty on a config push: publish only
-          esac
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v7
         with:
           path: repo
@@ -71,10 +114,8 @@ jobs:
             echo "No data branch yet: starting empty."
           fi
 
-      # Keys pasted from Windows can carry CRLF and lose the final newline,
-      # which ssh rejects: normalize the key before cloning.
       - name: Check out meridian-api (prod)
-        if: steps.tier.outputs.tier != ''
+        if: needs.plan.outputs.tier != ''
         env:
           DEPLOY_KEY: ${{ secrets.MERIDIAN_API_DEPLOY_KEY }}
         run: |
@@ -83,17 +124,17 @@ jobs:
             git clone -q --depth 1 --branch prod git@github.com:gitFrancoln/meridian-api.git api
           rm -f "$RUNNER_TEMP/deploy_key"
 
-      - if: steps.tier.outputs.tier != ''
+      - if: needs.plan.outputs.tier != ''
         uses: actions/setup-go@v7
         with:
           go-version-file: api/go.mod
           cache-dependency-path: api/go.sum
 
       - name: Ingest round
-        if: steps.tier.outputs.tier != ''
+        if: needs.plan.outputs.tier != ''
         env:
           MERIDIAN_CONTACT: ${{ secrets.MERIDIAN_CONTACT }}
-          TIER: ${{ steps.tier.outputs.tier }}
+          TIER: ${{ needs.plan.outputs.tier }}
           # Grafana Cloud Loki (logs of the ingest, such as the GDELT probe).
           # The address and the user are not secrets; without the token the
           # ingest sends nothing.
@@ -106,6 +147,13 @@ jobs:
           cp repo/config/ingest.json config/ingest.json
           (cd api && go build -o ../ingest ./cmd/ingest)
           ./ingest -config config -out data/site -state data/state -tier "$TIER"
+          mkdir -p data/state/schedule
+          now=$(date -u +%s)
+          if [ "$TIER" = 0 ]; then
+            for t in 1 2 3; do echo "$now" > "data/state/schedule/tier$t"; done
+          else
+            echo "$now" > "data/state/schedule/tier$TIER"
+          fi
 
       - name: Add the app configuration
         run: |
@@ -129,5 +177,17 @@ jobs:
         with:
           path: data/site
 
+      # Right after the upload, the Pages API sometimes does not see the
+      # artifact yet ("No artifacts named github-pages"): try once more after
+      # a pause.
       - id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+
+      - name: Wait before retrying the deploy
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 30
+
+      - id: deploy-retry
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v5

@@ -37,4 +37,4 @@ En Actions → publish → Run workflow, elegí el nivel (0 son todos los paíse
 | 2 | Cada 2 horas |
 | 3 | Cada 6 horas |
 
-El nivel de cada país está en el registro de medios de `meridian-api`. GitHub puede demorar las rondas programadas unos minutos en horas pico. Si una ronda falla, GitHub avisa por email. Si el repo pasa 60 días sin actividad, GitHub pausa las programaciones y avisa; se reactivan con un clic.
+El nivel de cada país está en el registro de medios de `meridian-api`. GitHub demora y a veces saltea las corridas programadas, así que el workflow se despierta cada 10 minutos, se fija qué nivel toca (la hora de la última ronda de cada nivel está en `state/schedule/` de la rama `data`) y corre ese, o termina en segundos si no toca ninguno. Una corrida salteada la cubre la siguiente. Si una ronda falla, GitHub avisa por email. Si el repo pasa 60 días sin actividad, GitHub pausa las programaciones y avisa; se reactivan con un clic.
