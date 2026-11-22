@@ -55,7 +55,9 @@ pages:
     - tier="${TIER:-}"
     - |
       if [ -n "$tier" ]; then
-        install -m 600 "$MERIDIAN_API_DEPLOY_KEY" "$HOME/deploy_key"
+        # Keys pasted from Windows can carry CRLF and lose the final newline,
+        # which ssh rejects: normalize them.
+        (umask 077; tr -d '\r' < "$MERIDIAN_API_DEPLOY_KEY" > "$HOME/deploy_key"; echo >> "$HOME/deploy_key")
         export GIT_SSH_COMMAND="ssh -i $HOME/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
         git clone --depth 1 --branch prod git@github.com:gitFrancoln/meridian-api.git api
         rm -f "$HOME/deploy_key"
