@@ -94,6 +94,12 @@ jobs:
         env:
           MERIDIAN_CONTACT: ${{ secrets.MERIDIAN_CONTACT }}
           TIER: ${{ steps.tier.outputs.tier }}
+          # Grafana Cloud Loki (logs of the ingest, such as the GDELT probe).
+          # The address and the user are not secrets; without the token the
+          # ingest sends nothing.
+          LOKI_URL: https://logs-prod-024.grafana.net
+          LOKI_USER: '1892359'
+          GRAFANA_LOKI_TOKEN: ${{ secrets.GRAFANA_LOKI_TOKEN }}
         run: |
           mkdir -p config
           cp -r api/config/sources config/sources
