@@ -3,7 +3,17 @@
   "disabledCountries": [],
   "disabledSources": [],
   "translation": {
-    "providers": ["mymemory"],
-    "dailyCharLimit": 45000
+    "enabled": true,
+    "providers": ["gemini", "workers-ai"],
+    "dailyLimits": {
+      "gemini": 300000,
+      "workers-ai": 400000,
+      "gemini-paid": 1000000,
+      "workers-ai-paid": 1000000
+    },
+    "paid": {
+      "enabled": false,
+      "providers": ["gemini-paid", "workers-ai-paid"]
+    }
   }
 }
