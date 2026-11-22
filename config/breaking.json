@@ -88,12 +88,6 @@
       "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/section/internacional/portada"
     },
     {
-      "id": "infobae",
-      "name": "Infobae",
-      "lang": "es",
-      "url": "https://www.infobae.com/arc/outboundfeeds/rss/?outputType=xml"
-    },
-    {
       "id": "clarin",
       "name": "Clarín Mundo",
       "lang": "es",
@@ -122,12 +116,6 @@
       "name": "SCMP World",
       "lang": "en",
       "url": "https://www.scmp.com/rss/91/feed"
-    },
-    {
-      "id": "gnworld",
-      "name": "Google News World",
-      "lang": "en",
-      "url": "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en"
     },
     {
       "id": "anadolu",
