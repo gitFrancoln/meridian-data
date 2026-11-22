@@ -5,7 +5,8 @@
 # - On a push to config/ on the default branch: publishes the new
 #   configuration without an ingest round, so a change to app.json reaches
 #   the app in a few minutes.
-# - By hand (Build > Pipelines > Run pipeline): set TIER to run a round.
+# - By hand (Build > Pipelines > Run pipeline, or the API): set TIER to run a
+#   round.
 #
 # What is published (public/) and the memory between rounds (state/) travel
 # as the artifacts of the last successful run on the default branch: each run
@@ -19,6 +20,7 @@ workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes: ['config/**/*']
 
