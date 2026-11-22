@@ -1,0 +1,127 @@
+# Collects the news and publishes them on GitHub Pages.
+#
+# - On schedule: one ingest round for the tier of that schedule.
+# - On a push to config/: publishes the new configuration without an ingest
+#   round, so a change to app.json reaches the app in about a minute.
+# - By hand (Actions > publish > Run workflow): a round for the chosen tier.
+#
+# The data branch keeps site/ (what is published) and state/ (memory between
+# rounds) as a single commit that is rewritten on every run.
+name: publish
+
+on:
+  schedule:
+    - cron: '7,37 * * * *' # tier 1, every 30 minutes
+    - cron: '22 */2 * * *' # tier 2, every 2 hours
+    - cron: '52 */6 * * *' # tier 3, every 6 hours
+  push:
+    branches: [main]
+    paths: ['config/**']
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Nivel de países (0 son todos)'
+        type: choice
+        options: ['0', '1', '2', '3']
+        default: '0'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Everything that writes the data branch runs one at a time.
+concurrency:
+  group: data
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Pick the tier
+        id: tier
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_TIER: ${{ inputs.tier }}
+        run: |
+          case "$SCHEDULE" in
+            '7,37 * * * *') tier=1 ;;
+            '22 */2 * * *') tier=2 ;;
+            '52 */6 * * *') tier=3 ;;
+            *) tier="$INPUT_TIER" ;; # empty on a config push: publish only
+          esac
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          path: repo
+
+      - name: Restore the data branch
+        working-directory: repo
+        run: |
+          mkdir -p ../data/site ../data/state
+          if git fetch --depth 1 origin data; then
+            git archive FETCH_HEAD | tar -x -C ../data
+          else
+            echo "No data branch yet: starting empty."
+          fi
+
+      # Keys pasted from Windows can carry CRLF and lose the final newline,
+      # which ssh rejects: normalize the key before cloning.
+      - name: Check out meridian-api (prod)
+        if: steps.tier.outputs.tier != ''
+        env:
+          DEPLOY_KEY: ${{ secrets.MERIDIAN_API_DEPLOY_KEY }}
+        run: |
+          (umask 077; printf '%s\n' "$DEPLOY_KEY" | tr -d '\r' > "$RUNNER_TEMP/deploy_key")
+          GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+            git clone -q --depth 1 --branch prod git@github.com:gitFrancoln/meridian-api.git api
+          rm -f "$RUNNER_TEMP/deploy_key"
+
+      - if: steps.tier.outputs.tier != ''
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+
+      - name: Ingest round
+        if: steps.tier.outputs.tier != ''
+        env:
+          MERIDIAN_CONTACT: ${{ secrets.MERIDIAN_CONTACT }}
+          TIER: ${{ steps.tier.outputs.tier }}
+        run: |
+          mkdir -p config
+          cp -r api/config/sources config/sources
+          cp repo/config/ingest.json config/ingest.json
+          (cd api && go build -o ../ingest ./cmd/ingest)
+          ./ingest -config config -out data/site -state data/state -tier "$TIER"
+
+      - name: Add the app configuration
+        run: |
+          jq empty repo/config/app.json
+          mkdir -p data/site/api/v1
+          cp repo/config/app.json data/site/api/v1/config.json
+
+      - name: Save the data branch
+        working-directory: data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b data
+          git add -A
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -qm "data: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:data
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: data/site
+
+      - id: deploy
+        uses: actions/deploy-pages@v5
