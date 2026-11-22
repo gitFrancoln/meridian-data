@@ -1,0 +1,73 @@
+# Collects the news and publishes them on GitLab Pages.
+#
+# - On schedule: one ingest round. The schedule's TIER variable picks the
+#   tier (0 is every country).
+# - On a push to config/ on the default branch: publishes the new
+#   configuration without an ingest round, so a change to app.json reaches
+#   the app in a few minutes.
+# - By hand (Build > Pipelines > Run pipeline): set TIER to run a round.
+#
+# What is published (public/) and the memory between rounds (state/) travel
+# as the artifacts of the last successful run on the default branch: each run
+# downloads them, updates them and uploads them again.
+#
+# Variables (Settings > CI/CD > Variables, masked or file type, never in the repo):
+#   MERIDIAN_API_DEPLOY_KEY  file: read-only SSH deploy key of meridian-api
+#   MERIDIAN_CONTACT         contact email that the news sites see
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: ['config/**/*']
+
+variables:
+  GIT_DEPTH: '1'
+  GOCACHE: $CI_PROJECT_DIR/.cache/go-build
+  GOMODCACHE: $CI_PROJECT_DIR/.cache/go-mod
+
+# The job has to be called pages for GitLab to deploy public/.
+pages:
+  image: golang:1.27-bookworm
+  timeout: 20m
+  # Everything that writes the data runs one at a time.
+  resource_group: data
+  cache:
+    key: go
+    paths: [.cache/]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends jq unzip
+  script:
+    - mkdir -p public state
+    # Restore the last published site and state. The first run has none.
+    - |
+      url="$CI_API_V4_URL/projects/$CI_PROJECT_ID/jobs/artifacts/$CI_DEFAULT_BRANCH/download?job=pages"
+      if curl -fsSL "$url" -o previous.zip; then
+        unzip -q -o previous.zip -d .
+        rm previous.zip
+      else
+        echo "No previous run: starting empty."
+      fi
+    # A push to config/ has no tier: publish only.
+    - tier="${TIER:-}"
+    - |
+      if [ -n "$tier" ]; then
+        install -m 600 "$MERIDIAN_API_DEPLOY_KEY" "$HOME/deploy_key"
+        export GIT_SSH_COMMAND="ssh -i $HOME/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+        git clone --depth 1 --branch prod git@github.com:gitFrancoln/meridian-api.git api
+        rm -f "$HOME/deploy_key"
+        mkdir -p config-run
+        cp -r api/config/sources config-run/sources
+        cp config/ingest.json config-run/ingest.json
+        (cd api && go build -o ../ingest ./cmd/ingest)
+        ./ingest -config config-run -out public -state state -tier "$tier"
+      fi
+    - jq empty config/app.json
+    - mkdir -p public/api/v1
+    - cp config/app.json public/api/v1/config.json
+  artifacts:
+    paths: [public, state]
+    expire_in: 30 days
+  rules:
+    - when: always
